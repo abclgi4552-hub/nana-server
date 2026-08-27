@@ -3,6 +3,7 @@ import re
 import json
 import asyncio
 import datetime
+import sqlite3
 from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -15,21 +16,73 @@ client = genai.Client(api_key=API_KEY)
 
 app = FastAPI()
 
-MEMORY_FILE = "nana_memory.json"
+DB_FILE = "nana_memory.db"
 
-def load_memory():
-    if os.path.exists(MEMORY_FILE):
-        try:
-            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"schedules": [], "learned_rules": [], "conversations": []}
-
-def save_memory(data):
+# PC와 동일한 SQLite DB 초기화 및 공유 함수들
+def init_db():
     try:
-        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS chat_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender TEXT,
+                message TEXT,
+                timestamp TEXT
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS learning_patterns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword TEXT,
+                action_executed TEXT,
+                count INTEGER
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS schedules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                time_str TEXT,
+                content TEXT
+            )
+        ''')
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+init_db()
+
+def get_schedules_from_db():
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT time_str, content FROM schedules ORDER BY id DESC LIMIT 10")
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
+def add_schedule_to_db(time_str: str, content: str):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO schedules (time_str, content) VALUES (?, ?)", (time_str, content))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+def save_chat_to_db(sender, message):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO chat_history (sender, message, timestamp) VALUES (?, ?, ?)",
+                       (sender, message, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
+        conn.close()
     except Exception:
         pass
 
@@ -121,7 +174,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
     </div>
 
     <div class="chat-box" id="chat">
-        <div class="msg nana">초고속 터보 모드 & 캘린더 연동 가동 완료! 무엇을 도와줄까?</div>
+        <div class="msg nana">초고속 터보 모드 & DB 캘린더 연동 완료! 무엇을 도와줄까?</div>
     </div>
 
     <div class="input-bar">
@@ -153,7 +206,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
 
         function speakText(text) {
             if (!window.speechSynthesis) return;
-            const cleanText = text.replace(/\[PC_CMD:.+?\]/g, '').replace(/\[LEARN:.+?\]/g, '').replace(/\[SCHEDULE:.+?\]/g, '').replace(/⏱️.+$/, '').trim();
+            const cleanText = text.replace(/\[PC_CMD:.+?\]/g, '').replace(/\[SCHEDULE:.+?\]/g, '').replace(/⏱️.+$/, '').trim();
             const utter = new SpeechSynthesisUtterance(cleanText);
             utter.lang = 'ko-KR';
             utter.rate = 1.05;
@@ -317,6 +370,7 @@ async def handle_chat(req: ChatRequest):
     pc_online = (connected_pc_ws is not None)
     
     start_time = datetime.datetime.now()
+    save_chat_to_db("user", prompt_text)
 
     # 1. 로컬 계산기 가속 (사칙연산)
     cleaned_calc = prompt_text.replace(" ", "").replace("X", "*").replace("x", "*").replace("÷", "/")
@@ -324,7 +378,9 @@ async def handle_chat(req: ChatRequest):
         try:
             result = eval(cleaned_calc)
             elapsed = (datetime.datetime.now() - start_time).total_seconds()
-            return {"reply": f"계산 결과는 {result}야!\n⏱️ (처리 시간: {elapsed:.2f}초)"}
+            reply_str = f"계산 결과는 {result}야!\n⏱️ (처리 시간: {elapsed:.2f}초)"
+            save_chat_to_db("bot", reply_str)
+            return {"reply": reply_str}
         except Exception:
             pass
 
@@ -333,32 +389,40 @@ async def handle_chat(req: ChatRequest):
         now = datetime.datetime.now()
         time_str = now.strftime('%Y년 %m월 %d일 %p %I시 %m분').replace('AM', '오전').replace('PM', '오후')
         elapsed = (datetime.datetime.now() - start_time).total_seconds()
-        return {"reply": f"지금은 {time_str}야!\n⏱️ (처리 시간: {elapsed:.2f}초)"}
+        reply_str = f"지금은 {time_str}야!\n⏱️ (처리 시간: {elapsed:.2f}초)"
+        save_chat_to_db("bot", reply_str)
+        return {"reply": reply_str}
 
-    memory = load_memory()
-    learned_context = "\n".join([f"- {r}" for r in memory["learned_rules"][-10:]])
-    schedule_context = "\n".join([f"- [{s['date']}] {s['content']}" for s in memory["schedules"][-10:]])
+    # 3. 스케줄 조회 가속 ("일정 보여줘" 등)
+    if any(k in prompt_text for k in ["일정", "스케줄", "목록"]):
+        rows = get_schedules_from_db()
+        if not rows:
+            schedule_text = "등록된 스케줄이 없어."
+        else:
+            schedule_text = "저장된 스케줄 목록이야:\n" + "".join([f"- [{r[0]}]: {r[1]}\n" for r in rows])
+        elapsed = (datetime.datetime.now() - start_time).total_seconds()
+        reply_str = f"{schedule_text.strip()}\n⏱️ (처리 시간: {elapsed:.2f}초)"
+        save_chat_to_db("bot", reply_str)
+        return {"reply": reply_str}
+
+    rows = get_schedules_from_db()
+    schedule_context = "\n".join([f"- [{r[0]}] {r[1]}" for r in rows]) if rows else '등록된 스케줄이 없어.'
 
     system_instruction = f"""
 너는 다정한 20대 버추얼 AI 비서 '나나'야. 반말로 즉시 대답해.
 - 현재 시각: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}
 - PC 상태: {'온라인(연결됨)' if pc_online else '오프라인(꺼져있음)'}.
 
-[기억된 학습 내용]
-{learned_context if learned_context else '없음'}
-
 [저장된 스케줄]
-{schedule_context if schedule_context else '없음'}
+{schedule_context}
 
 [규칙]
 1. PC 제어/실행 요청 시: PC가 온라인일 때만 [PC_CMD: 명령어] 형식 포함, 오프라인이면 PC가 꺼져있다고 안내.
-2. 학습 내용/규칙 등록 요청 시: 반드시 답안에 [LEARN: 요약내용] 형식 포함.
-3. 스케줄 등록 요청 시: 반드시 답안에 [SCHEDULE: 날짜|내용] 형식 포함.
-4. 일상 대화나 단순 질문은 태그 없이 가볍고 다정한 반말로 1~2문장으로 즉시 답변.
+2. 스케줄 등록 요청 시: 반드시 답안에 [SCHEDULE: 날짜|내용] 형식 포함.
+3. 일상 대화나 단순 질문은 태그 없이 가볍고 다정한 반말로 1~2문장으로 즉시 답변.
 """
 
     try:
-        # 스마트 동적 토큰 제어 적용 (코드/설명 요청 시 8192, 평소 2000)
         needs_long_response = any(k in prompt_text for k in ["코드", "설명", "알려줘", "분석", "작성", "짜줘", "추천", "정리"])
         target_tokens = 8192 if needs_long_response else 2000
 
@@ -373,23 +437,13 @@ async def handle_chat(req: ChatRequest):
         )
         reply = response.text.strip() if response.text else "알겠어!"
 
-        # 학습 내용 저장
-        if "[LEARN:" in reply:
-            match_learn = re.search(r'\[LEARN:\s*(.+?)\]', reply)
-            if match_learn:
-                rule_text = match_learn.group(1).strip()
-                if rule_text not in memory["learned_rules"]:
-                    memory["learned_rules"].append(rule_text)
-                    save_memory(memory)
-
-        # 스케줄 저장 (캘린더 연동 보완)
+        # 스케줄 등록 태그 감지 및 DB 저장
         if "[SCHEDULE:" in reply:
             match_sched = re.search(r'\[SCHEDULE:\s*(.+?)\s*\|\s*(.+?)\]', reply)
             if match_sched:
                 s_date = match_sched.group(1).strip()
                 s_content = match_sched.group(2).strip()
-                memory["schedules"].append({"date": s_date, "content": s_content})
-                save_memory(memory)
+                add_schedule_to_db(s_date, s_content)
 
         # PC 명령어 처리 및 결과 수신 대기
         if "[PC_CMD:" in reply and pc_online:
@@ -410,13 +464,17 @@ async def handle_chat(req: ChatRequest):
                 finally:
                     pending_command_futures.pop(task_id, None)
 
-        clean_reply = re.sub(r'\[(PC_CMD|LEARN|SCHEDULE):.+?\]', '', reply).strip()
+        clean_reply = re.sub(r'\[(PC_CMD|SCHEDULE):.+?\]', '', reply).strip()
         elapsed = (datetime.datetime.now() - start_time).total_seconds()
         final_reply = f"{clean_reply if clean_reply else '응, 알겠어!'}\n⏱️ (처리 시간: {elapsed:.2f}초)"
+        
+        save_chat_to_db("bot", final_reply)
         return {"reply": final_reply}
     except Exception as e:
         elapsed = (datetime.datetime.now() - start_time).total_seconds()
-        return {"reply": f"오류 발생: {e}\n⏱️ (처리 시간: {elapsed:.2f}초)"}
+        err_reply = f"오류 발생: {e}\n⏱️ (처리 시간: {elapsed:.2f}초)"
+        save_chat_to_db("bot", err_reply)
+        return {"reply": err_reply}
 
 if __name__ == "__main__":
     import uvicorn
