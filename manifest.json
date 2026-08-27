@@ -1,0 +1,13 @@
+{
+  "background_color": "#ffffff",
+  "dir": "ltr",
+  "display": "standalone",
+  "name": "나나 비서",
+  "orientation": "any",
+  "scope": "/",
+  "short_name": "나나 비서",
+  "start_url": "/",
+  "theme_color": "#FF6B8B",
+  "id": "Nana",
+  "description": "나나 AI 비서"
+}
