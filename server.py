@@ -15,6 +15,25 @@ client = genai.Client(api_key=API_KEY)
 
 app = FastAPI()
 
+# 학습 내용 및 스케줄을 저장할 JSON 파일 경로
+MEMORY_FILE = "nana_memory.json"
+
+def load_memory():
+    if os.path.exists(MEMORY_FILE):
+        try:
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"schedules": [], "learned_rules": [], "conversations": []}
+
+def save_memory(data):
+    try:
+        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 connected_pc_ws: Optional[WebSocket] = None
 latest_screen_base64: str = ""
 pending_command_futures = {}
@@ -102,11 +121,11 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
     </div>
 
     <div class="chat-box" id="chat">
-        <div class="msg nana">안녕! 휴대폰에서도 PC 제어와 모든 API 기능을 다 쓸 수 있어. 편하게 말해줘!</div>
+        <div class="msg nana">안녕! 스케줄 관리와 행동 학습 기능이 추가되었어. 기억해줬으면 하는 내용을 편하게 말해줘!</div>
     </div>
 
     <div class="input-bar">
-        <input type="text" id="msgInput" placeholder="명령 또는 대화 입력..." onkeypress="if(event.keyCode==13) sendMsg()">
+        <input type="text" id="msgInput" placeholder="명령 또는 학습 내용 입력..." onkeypress="if(event.keyCode==13) sendMsg()">
         <button onclick="sendMsg()">전송</button>
     </div>
 
@@ -134,7 +153,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
 
         function speakText(text) {
             if (!window.speechSynthesis) return;
-            const cleanText = text.replace(/\[PC_CMD:.+?\]/g, '').trim();
+            const cleanText = text.replace(/\[PC_CMD:.+?\]/g, '').replace(/\[LEARN:.+?\]/g, '').replace(/\[SCHEDULE:.+?\]/g, '').trim();
             const utter = new SpeechSynthesisUtterance(cleanText);
             utter.lang = 'ko-KR';
             utter.rate = 1.05;
@@ -299,7 +318,27 @@ async def get_screen():
 async def handle_chat(req: ChatRequest):
     global connected_pc_ws
     pc_online = (connected_pc_ws is not None)
-    system_instruction = f"너의 이름은 나나야. 사용자의 모바일 및 PC 제어와 스케줄 관리를 돕는 만능 20대 버추얼 AI 비서야. PC 상태: {'온라인' if pc_online else '오프라인'}. PC 제어나 프로그램 실행 요청 시 [PC_CMD: 명령어] 형식을 포함해서 다정한 반말로 답해줘."
+    
+    memory = load_memory()
+    learned_context = "\n".join([f"- {r}" for r in memory["learned_rules"][-15:]])
+    schedule_context = "\n".join([f"- [{s['date']}] {s['content']}" for s in memory["schedules"][-15:]])
+
+    system_instruction = f"""
+너의 이름은 나나야. 사용자의 모바일 및 PC 제어와 스케줄 관리, 행동 학습을 돕는 만능 20대 버추얼 AI 비서야.
+PC 상태: {'온라인' if pc_online else '오프라인'}.
+
+[현재 기억된 학습 내용/규칙]
+{learned_context if learned_context else '아직 학습된 내용 없음'}
+
+[현재 저장된 스케줄]
+{schedule_context if schedule_context else '등록된 스케줄 없음'}
+
+[명령어 규칙]
+1. PC 제어 또는 프로그램 실행 요청 시: 답안에 [PC_CMD: 명령어] 형식 포함.
+2. 사용자가 어떤 규칙, 취향, 행동 패턴을 가르쳐주거나 학습을 시킬 때: 답안에 [LEARN: 학습할내용 요약] 형식 포함.
+3. 스케줄 등록 요청 시: 답안에 [SCHEDULE: 날짜/시간|내용] 형식 포함.
+모든 답변은 다정한 반말로 1~2문장으로 짧게 해줘.
+"""
     try:
         response = client.models.generate_content(
             model="gemini-3.6-flash",
@@ -307,19 +346,38 @@ async def handle_chat(req: ChatRequest):
             config=types.GenerateContentConfig(system_instruction=system_instruction, temperature=0.6)
         )
         reply = response.text.strip() if response.text else "확인했어!"
+
+        # 1. 학습 내용 저장 처리
+        if "[LEARN:" in reply:
+            match_learn = re.search(r'\[LEARN:\s*(.+?)\]', reply)
+            if match_learn:
+                rule_text = match_learn.group(1).strip()
+                memory["learned_rules"].append(rule_text)
+                save_memory(memory)
+
+        # 2. 스케줄 저장 처리
+        if "[SCHEDULE:" in reply:
+            match_sched = re.search(r'\[SCHEDULE:\s*(.+?)\s*\|\s*(.+?)\]', reply)
+            if match_sched:
+                s_date = match_sched.group(1).strip()
+                s_content = match_sched.group(2).strip()
+                memory["schedules"].append({"date": s_date, "content": s_content})
+                save_memory(memory)
+
+        # 3. PC 명령어 처리
         if "[PC_CMD:" in reply and pc_online:
-            match = re.search(r'\[PC_CMD:\s*(.+?)\]', reply)
-            if match:
-                cmd_raw = match.group(1).strip()
+            match_cmd = re.search(r'\[PC_CMD:\s*(.+?)\]', reply)
+            if match_cmd:
+                cmd_raw = match_cmd.group(1).strip()
                 task_id = f"task_{datetime.now().timestamp()}"
                 loop = asyncio.get_event_loop()
                 fut = loop.create_future()
                 pending_command_futures[task_id] = fut
                 await connected_pc_ws.send_text(json.dumps({"type": "run_command", "task_id": task_id, "query": cmd_raw}))
-                clean_reply = re.sub(r'\[PC_CMD:.+?\]', '', reply).strip()
-                return {"reply": clean_reply if clean_reply else f"{cmd_raw} 실행 완료!"}
-        clean_reply = re.sub(r'\[PC_CMD:.+?\]', '', reply).strip()
-        return {"reply": clean_reply}
+
+        # 사용자에게 보여줄 때는 특수 태그 싹 정리해서 깔끔하게 전달
+        clean_reply = re.sub(r'\[(PC_CMD|LEARN|SCHEDULE):.+?\]', '', reply).strip()
+        return {"reply": clean_reply if clean_reply else "기억해둘게!"}
     except Exception as e:
         return {"reply": f"오류 발생: {e}"}
 
