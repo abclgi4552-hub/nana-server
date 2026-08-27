@@ -15,7 +15,6 @@ client = genai.Client(api_key=API_KEY)
 
 app = FastAPI()
 
-# 학습 내용 및 스케줄을 저장할 JSON 파일 경로
 MEMORY_FILE = "nana_memory.json"
 
 def load_memory():
@@ -122,7 +121,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
     </div>
 
     <div class="chat-box" id="chat">
-        <div class="msg nana">안녕! 이제 PC가 꺼져 있어도 즉시 대답하고 빠르게 소통할 수 있어!</div>
+        <div class="msg nana">초고속 터보 모드 가동 완료! 무엇을 도와줄까?</div>
     </div>
 
     <div class="input-bar">
@@ -169,10 +168,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
 
         function initRecognition() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SpeechRecognition) {
-                alert("현재 브라우저에서 음성 인식을 지원하지 않습니다.");
-                return null;
-            }
+            if (!SpeechRecognition) return null;
             const rec = new SpeechRecognition();
             rec.lang = 'ko-KR';
             rec.continuous = true;
@@ -180,7 +176,6 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
 
             rec.onresult = (event) => {
                 if (isSpeaking) return;
-
                 const transcript = event.results[event.results.length - 1][0].transcript.trim();
                 const vStatus = document.getElementById('voiceStatus');
                 vStatus.innerText = `🎙️ 인식: "${transcript}"`;
@@ -308,7 +303,7 @@ async def get_screen():
     pending_command_futures[task_id] = fut
     try:
         await connected_pc_ws.send_text(json.dumps({"type": "get_screen", "task_id": task_id}))
-        result = await asyncio.wait_for(fut, timeout=4.0)
+        result = await asyncio.wait_for(fut, timeout=3.0)
         return {"image": result.get("image")}
     except Exception:
         return {"image": None, "reply": "화면을 가져오는 데 실패했어."}
@@ -321,34 +316,39 @@ async def handle_chat(req: ChatRequest):
     pc_online = (connected_pc_ws is not None)
     
     memory = load_memory()
-    learned_context = "\n".join([f"- {r}" for r in memory["learned_rules"][-15:]])
-    schedule_context = "\n".join([f"- [{s['date']}] {s['content']}" for s in memory["schedules"][-15:]])
+    learned_context = "\n".join([f"- {r}" for r in memory["learned_rules"][-10:]])
+    schedule_context = "\n".join([f"- [{s['date']}] {s['content']}" for s in memory["schedules"][-10:]])
 
     system_instruction = f"""
 너의 이름은 나나야. 사용자의 모바일 및 PC 제어와 스케줄 관리, 행동 학습을 돕는 만능 20대 버추얼 AI 비서야.
-PC 상태: {'온라인(연결됨)' if pc_online else '오프라인(꺼져있음)'}.
+- 현재 시각: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+- PC 상태: {'온라인(연결됨)' if pc_online else '오프라인(꺼져있음)'}.
 
-[현재 기억된 학습 내용/규칙]
-{learned_context if learned_context else '아직 학습된 내용 없음'}
+[기억된 학습 내용]
+{learned_context if learned_context else '없음'}
 
-[현재 저장된 스케줄]
-{schedule_context if schedule_context else '등록된 스케줄 없음'}
+[저장된 스케줄]
+{schedule_context if schedule_context else '없음'}
 
-[명령어 규칙]
-1. PC 제어 또는 프로그램 실행 요청 시: PC가 온라인일 때만 [PC_CMD: 명령어] 형식을 포함하고, 오프라인이면 "지금 PC가 꺼져 있어서 실행할 수 없어"라고 해줘.
-2. 사용자가 규칙, 취향, 행동 패턴을 가르쳐줄 때: 답안에 [LEARN: 학습할내용 요약] 형식 포함.
-3. 스케줄 등록 요청 시: 답안에 [SCHEDULE: 날짜/시간|내용] 형식 포함.
-모든 답변은 다정한 반말로 1~2문장으로 짧게 해줘.
+[규칙]
+1. PC 제어 요청 시: PC가 온라인일 때만 [PC_CMD: 명령어] 형식 포함, 오프라인이면 PC가 꺼져있다고 안내.
+2. 학습 내용/규칙 등록 요청 시: 반드시 답안에 [LEARN: 요약내용] 형식 포함.
+3. 스케줄/알람 등록 요청 시: 반드시 답안에 [SCHEDULE: 날짜/시간|내용] 형식 포함.
+4. 일상 대화나 단순 질문은 태그 없이 가볍고 다정한 반말로 1~2문장으로 즉시 답변.
 """
     try:
+        # 일상 대화일 때는 도구/태그 처리를 가볍게 하고 속도 우선형 설정 적용
         response = client.models.generate_content(
             model="gemini-3.6-flash",
             contents=req.text,
-            config=types.GenerateContentConfig(system_instruction=system_instruction, temperature=0.6)
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.3
+            )
         )
-        reply = response.text.strip() if response.text else "확인했어!"
+        reply = response.text.strip() if response.text else "알겠어!"
 
-        # 1. 학습 내용 저장 처리
+        # 학습 내용 저장
         if "[LEARN:" in reply:
             match_learn = re.search(r'\[LEARN:\s*(.+?)\]', reply)
             if match_learn:
@@ -357,7 +357,7 @@ PC 상태: {'온라인(연결됨)' if pc_online else '오프라인(꺼져있음)
                     memory["learned_rules"].append(rule_text)
                     save_memory(memory)
 
-        # 2. 스케줄 저장 처리
+        # 스케줄 저장
         if "[SCHEDULE:" in reply:
             match_sched = re.search(r'\[SCHEDULE:\s*(.+?)\s*\|\s*(.+?)\]', reply)
             if match_sched:
@@ -366,7 +366,7 @@ PC 상태: {'온라인(연결됨)' if pc_online else '오프라인(꺼져있음)
                 memory["schedules"].append({"date": s_date, "content": s_content})
                 save_memory(memory)
 
-        # 3. PC 명령어 처리 (온라인일 때만 비동기 요청 후 즉시 반환 대기)
+        # PC 명령어 처리
         if "[PC_CMD:" in reply and pc_online:
             match_cmd = re.search(r'\[PC_CMD:\s*(.+?)\]', reply)
             if match_cmd:
@@ -377,14 +377,12 @@ PC 상태: {'온라인(연결됨)' if pc_online else '오프라인(꺼져있음)
                 pending_command_futures[task_id] = fut
                 try:
                     await connected_pc_ws.send_text(json.dumps({"type": "run_command", "task_id": task_id, "query": cmd_raw}))
-                    # 응답 속도를 위해 최대 3초까지만 기다림
-                    await asyncio.wait_for(fut, timeout=3.0)
+                    await asyncio.wait_for(fut, timeout=2.5)
                 except Exception:
                     pass
                 finally:
                     pending_command_futures.pop(task_id, None)
 
-        # 사용자에게 보여줄 때는 특수 태그 싹 정리해서 깔끔하게 전달
         clean_reply = re.sub(r'\[(PC_CMD|LEARN|SCHEDULE):.+?\]', '', reply).strip()
         return {"reply": clean_reply if clean_reply else "기억해둘게!"}
     except Exception as e:
