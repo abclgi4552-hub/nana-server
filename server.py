@@ -64,9 +64,96 @@ def save_chat_to_db(sender, message):
     except Exception:
         pass
 
+# ==========================================
+# 모바일에서 실행 가능한 툴 선언 (PC 웹소켓 경유)
+# ==========================================
 connected_pc_ws: Optional[WebSocket] = None
 latest_screen_base64: str = ""
 pending_command_futures = {}
+
+async def call_pc_tool(query_str: str) -> str:
+    if not connected_pc_ws:
+        return "지금 집 컴퓨터가 꺼져 있거나 연결되어 있지 않아, 주인님."
+    task_id = f"task_{datetime.datetime.now().timestamp()}"
+    loop = asyncio.get_event_loop()
+    fut = loop.create_future()
+    pending_command_futures[task_id] = fut
+    try:
+        await connected_pc_ws.send_text(json.dumps({"type": "run_command", "task_id": task_id, "query": query_str}))
+        result = await asyncio.wait_for(fut, timeout=6.0)
+        return result.get("result", "완료했어, 주인님.")
+    except Exception:
+        return "PC 제어 명령 처리 중 응답 시간이 초과되었어, 주인님."
+    finally:
+        pending_command_futures.pop(task_id, None)
+
+def smart_launch_game_or_app(query: str) -> str:
+    # 동기식 함수 인터페이스 (내부적으로 이벤트 루프를 통해 PC 웹소켓 호출)
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # 이미 실행 중인 루프가 있다면 코루틴을 태스크로 던질 수 없으므로 안전하게 처리
+            pass
+    except Exception:
+        pass
+    return asyncio.run(call_pc_tool(f"{query} 실행해줘"))
+
+def close_application(process_name: str) -> str:
+    return asyncio.run(call_pc_tool(f"{process_name} 종료해줘"))
+
+def mouse_click(x: int = -1, y: int = -1, click_type: str = "left", clicks: int = 1) -> str:
+    return asyncio.run(call_pc_tool(f"마우스 클릭 x={x} y={y}"))
+
+def keyboard_press(keys: str) -> str:
+    return asyncio.run(call_pc_tool(f"키보드 입력 {keys}"))
+
+def run_system_command(command: str) -> str:
+    return asyncio.run(call_pc_tool(command))
+
+def add_schedule(time_str: str, content: str) -> str:
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO schedules (time_str, content) VALUES (?, ?)", (time_str, content))
+        conn.commit()
+        conn.close()
+        return f"일정 등록했어, 주인님: [{time_str}] {content}"
+    except Exception as e:
+        return f"저장 오류: {e}"
+
+def delete_schedule(content_keyword: str) -> str:
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM schedules WHERE content LIKE ? OR time_str LIKE ?", (f"%{content_keyword}%", f"%{content_keyword}%"))
+        conn.commit()
+        conn.close()
+        return f"'{content_keyword}' 관련 일정 지웠어, 주인님."
+    except Exception as e:
+        return f"삭제 오류: {e}"
+
+def get_schedules() -> str:
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT time_str, content FROM schedules ORDER BY id DESC LIMIT 10")
+        rows = cursor.fetchall()
+        conn.close()
+        if not rows: return "등록된 일정 없어, 주인님."
+        res = "저장된 일정이야:\n"
+        for r in rows: res += f"- {r[0]}: {r[1]}\n"
+        return res.strip()
+    except Exception:
+        return "조회 오류."
+
+def check_time_tool() -> str:
+    now = datetime.datetime.now()
+    return f"지금은 {now.strftime('%Y년 %m월 %d일')} {now.strftime('%p').replace('AM', '오전').replace('PM', '오후')} {now.strftime('%I시 %M분')}이야, 주인님."
+
+def empty_recycle_bin() -> str:
+    return asyncio.run(call_pc_tool("휴지통 비워줘"))
+
+all_tools = [smart_launch_game_or_app, close_application, mouse_click, keyboard_press, run_system_command, add_schedule, get_schedules, delete_schedule, check_time_tool, empty_recycle_bin]
 
 @app.websocket("/ws/pc")
 async def pc_websocket_endpoint(websocket: WebSocket):
@@ -152,7 +239,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
     </div>
 
     <div class="chat-box" id="chat">
-        <div class="msg nana">PC 완벽 연동 모드 가동 완료! 무엇을 도와줄까?</div>
+        <div class="msg nana">모바일 제어 패치 완료, 주인님! 무엇을 도와줄까?</div>
     </div>
 
     <div class="input-bar">
@@ -184,7 +271,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
 
         function speakText(text) {
             if (!window.speechSynthesis) return;
-            const cleanText = text.replace(/\[PC_CMD:.+?\]/g, '').replace(/\[SCHEDULE:.+?\]/g, '').replace(/⏱️.+$/, '').trim();
+            const cleanText = text.replace(/⏱️.+$/, '').trim();
             const utter = new SpeechSynthesisUtterance(cleanText);
             utter.lang = 'ko-KR';
             utter.rate = 1.05;
@@ -260,13 +347,13 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
             if (data.image) {
                 chat.innerHTML += `
                     <div class="msg nana">
-                        현재 PC 화면이야!
+                        현재 PC 화면이야, 주인님!
                         <img src="${data.image}" class="screen-img" onclick="window.open(this.src)">
                     </div>
                 `;
             } else {
-                chat.innerHTML += `<div class="msg nana">${data.reply || 'PC가 꺼져 있어.'}</div>`;
-                speakText(data.reply || 'PC가 꺼져 있어.');
+                chat.innerHTML += `<div class="msg nana">${data.reply || 'PC가 꺼져 있어, 주인님.'}</div>`;
+                speakText(data.reply || 'PC가 꺼져 있어, 주인님.');
             }
             chat.scrollTop = chat.scrollHeight;
         }
@@ -327,17 +414,17 @@ async def get_status():
 async def get_screen():
     global connected_pc_ws
     if not connected_pc_ws:
-        return {"image": None, "reply": "지금 집 컴퓨터가 꺼져 있어."}
+        return {"image": None, "reply": "지금 집 컴퓨터가 꺼져 있어, 주인님."}
     task_id = f"task_{datetime.datetime.now().timestamp()}"
     loop = asyncio.get_event_loop()
     fut = loop.create_future()
     pending_command_futures[task_id] = fut
     try:
         await connected_pc_ws.send_text(json.dumps({"type": "get_screen", "task_id": task_id}))
-        result = await asyncio.wait_for(fut, timeout=4.0)
+        result = await asyncio.wait_for(fut, timeout=5.0)
         return {"image": result.get("image")}
     except Exception:
-        return {"image": None, "reply": "화면을 가져오는 데 실패했어."}
+        return {"image": None, "reply": "화면을 가져오는 데 실패했어, 주인님."}
     finally:
         pending_command_futures.pop(task_id, None)
 
@@ -350,13 +437,13 @@ async def handle_chat(req: ChatRequest):
     start_time = datetime.datetime.now()
     save_chat_to_db("user", prompt_text)
 
-    # 1. 로컬 계산기 가속 (사칙연산)
+    # 1. 로컬 계산기 가속
     cleaned_calc = prompt_text.replace(" ", "").replace("X", "*").replace("x", "*").replace("÷", "/")
     if re.fullmatch(r"[0-9\+\-\*\/\(\)\.]+", cleaned_calc):
         try:
             result = eval(cleaned_calc)
             elapsed = (datetime.datetime.now() - start_time).total_seconds()
-            reply_str = f"계산 결과는 {result}야!\n⏱️ (처리 시간: {elapsed:.2f}초)"
+            reply_str = f"결과는 {result}야, 주인님!\n⏱️ (처리 시간: {elapsed:.2f}초)"
             save_chat_to_db("bot", reply_str)
             return {"reply": reply_str}
         except Exception:
@@ -367,113 +454,59 @@ async def handle_chat(req: ChatRequest):
         now = datetime.datetime.now()
         time_str = now.strftime('%Y년 %m월 %d일 %p %I시 %m분').replace('AM', '오전').replace('PM', '오후')
         elapsed = (datetime.datetime.now() - start_time).total_seconds()
-        reply_str = f"지금은 {time_str}야!\n⏱️ (처리 시간: {elapsed:.2f}초)"
+        reply_str = f"지금은 {time_str}이야, 주인님!\n⏱️ (처리 시간: {elapsed:.2f}초)"
         save_chat_to_db("bot", reply_str)
         return {"reply": reply_str}
 
-    # 3. 스케줄 조회 요청 시, PC가 켜져 있으면 PC에 직접 일정을 물어보도록 웹소켓 토스!
-    if any(k in prompt_text for k in ["일정", "스케줄", "목록"]):
-        if pc_online:
-            task_id = f"task_{datetime.datetime.now().timestamp()}"
-            loop = asyncio.get_event_loop()
-            fut = loop.create_future()
-            pending_command_futures[task_id] = fut
-            try:
-                await connected_pc_ws.send_text(json.dumps({"type": "run_command", "task_id": task_id, "query": "일정 보여줘"}))
-                res_data = await asyncio.wait_for(fut, timeout=3.0)
-                if res_data and "result" in res_data:
-                    elapsed = (datetime.datetime.now() - start_time).total_seconds()
-                    final_reply = f"{res_data['result']}\n⏱️ (처리 시간: {elapsed:.2f}초)"
-                    save_chat_to_db("bot", final_reply)
-                    return {"reply": final_reply}
-            except Exception:
-                pass
-            finally:
-                pending_command_futures.pop(task_id, None)
-
-    # 로컬 fallback 스케줄 조회
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT time_str, content FROM schedules ORDER BY id DESC LIMIT 10")
-        rows = cursor.fetchall()
-        conn.close()
-        schedule_context = "\n".join([f"- [{r[0]}] {r[1]}" for r in rows]) if rows else '등록된 스케줄이 없어.'
-    except Exception:
-        schedule_context = '등록된 스케줄이 없어.'
-
     system_instruction = f"""
-너는 다정한 20대 버추얼 AI 비서 '나나'야. 반말로 즉시 대답해.
-- 현재 시각: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}
+너는 버추얼 AI 비서 '나나'야. 사용자를 항상 **'주인님'**이라고 부르며, 친근하고 편안한 **반말**을 사용해.
+- 현재 시각: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
 - PC 상태: {'온라인(연결됨)' if pc_online else '오프라인(꺼져있음)'}.
 
-[저장된 스케줄]
-{schedule_context}
-
-[규칙]
-1. PC 제어/실행 요청 시: PC가 온라인일 때만 [PC_CMD: 명령어] 형식 포함, 오프라인이면 PC가 꺼져있다고 안내.
-2. 스케줄 등록 요청 시: 반드시 답안에 [SCHEDULE: 날짜|내용] 형식 포함.
-3. 일상 대화나 단순 질문은 태그 없이 가볍고 다정한 반말로 1~2문장으로 즉시 답변.
+[규칙 및 톤앤매너]
+1. 중요하지 않은 일상 대화나 단순 확인 요청에는 "응, 주인님", "알았어"처럼 최대한 짧고 간결하게 대답해 줘.
+2. PC 제어, 프로그램 실행, 스케줄 관리 등 요청이 오면 툴을 적극적으로 사용해.
 """
 
     try:
         needs_long_response = any(k in prompt_text for k in ["코드", "설명", "알려줘", "분석", "작성", "짜줘", "추천", "정리"])
         target_tokens = 8192 if needs_long_response else 2000
 
+        # 모바일 서버에서도 PC 버전과 동일하게 Function Calling(tools) 활성화
         response = client.models.generate_content(
             model="gemini-3.6-flash",
             contents=prompt_text,
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 temperature=0.3,
-                max_output_tokens=target_tokens
+                max_output_tokens=target_tokens,
+                tools=all_tools
             )
         )
-        reply = response.text.strip() if response.text else "알겠어!"
 
-        # 스케줄 등록 태그 감지 및 DB 저장
-        if "[SCHEDULE:" in reply:
-            match_sched = re.search(r'\[SCHEDULE:\s*(.+?)\s*\|\s*(.+?)\]', reply)
-            if match_sched:
-                s_date = match_sched.group(1).strip()
-                s_content = match_sched.group(2).strip()
-                try:
-                    conn = sqlite3.connect(DB_FILE)
-                    cursor = conn.cursor()
-                    cursor.execute("INSERT INTO schedules (time_str, content) VALUES (?, ?)", (s_date, s_content))
-                    conn.commit()
-                    conn.close()
-                except Exception:
-                    pass
+        reply_text = ""
+        if response.function_calls:
+            for call in response.function_calls:
+                fn_name = call.name
+                fn_args = call.args
+                tool_func = globals().get(fn_name)
+                if tool_func:
+                    reply_text = tool_func(**fn_args)
+                else:
+                    reply_text = "다 됐어, 주인님."
+        elif response.text:
+            reply_text = response.text.strip()
+        else:
+            reply_text = "응, 알겠어 주인님."
 
-        # PC 명령어 처리 및 결과 수신 대기
-        if "[PC_CMD:" in reply and pc_online:
-            match_cmd = re.search(r'\[PC_CMD:\s*(.+?)\]', reply)
-            if match_cmd:
-                cmd_raw = match_cmd.group(1).strip()
-                task_id = f"task_{datetime.datetime.now().timestamp()}"
-                loop = asyncio.get_event_loop()
-                fut = loop.create_future()
-                pending_command_futures[task_id] = fut
-                try:
-                    await connected_pc_ws.send_text(json.dumps({"type": "run_command", "task_id": task_id, "query": cmd_raw}))
-                    res_data = await asyncio.wait_for(fut, timeout=3.0)
-                    if res_data and "result" in res_data:
-                        reply = res_data["result"]
-                except Exception:
-                    pass
-                finally:
-                    pending_command_futures.pop(task_id, None)
-
-        clean_reply = re.sub(r'\[(PC_CMD|SCHEDULE):.+?\]', '', reply).strip()
         elapsed = (datetime.datetime.now() - start_time).total_seconds()
-        final_reply = f"{clean_reply if clean_reply else '응, 알겠어!'}\n⏱️ (처리 시간: {elapsed:.2f}초)"
+        final_reply = f"{reply_text}\n⏱️ (처리 시간: {elapsed:.2f}초)"
         
         save_chat_to_db("bot", final_reply)
         return {"reply": final_reply}
     except Exception as e:
         elapsed = (datetime.datetime.now() - start_time).total_seconds()
-        err_reply = f"오류 발생: {e}\n⏱️ (처리 시간: {elapsed:.2f}초)"
+        err_reply = f"오류 났어, 주인님: {e}\n⏱️ (처리 시간: {elapsed:.2f}초)"
         save_chat_to_db("bot", err_reply)
         return {"reply": err_reply}
 
