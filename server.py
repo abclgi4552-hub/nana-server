@@ -24,7 +24,6 @@ async def pc_websocket_endpoint(websocket: WebSocket):
     global connected_pc_ws, latest_screen_base64
     await websocket.accept()
     connected_pc_ws = websocket
-    print("PC connected")
     try:
         while True:
             data = await websocket.receive_text()
@@ -41,7 +40,223 @@ async def pc_websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         connected_pc_ws = None
 
-HTML_MOBILE_APP = """<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><title>나나 비서</title><style>*{box-sizing:border-box;margin:0;padding:0;font-family:sans-serif;}body{background:#FFF5F7;height:100vh;display:flex;flex-direction:column;}.header{background:#FF6B8B;color:white;padding:14px;font-weight:bold;display:flex;justify-content:space-between;}.status-badge{font-size:0.75rem;padding:4px 8px;border-radius:12px;background:#6C757D;}.quick-actions{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:8px 10px;background:#FFE8EE;}.btn-quick{background:white;border:1px solid #FFCCD7;color:#FF477E;padding:8px 2px;border-radius:8px;font-size:0.75rem;font-weight:bold;cursor:pointer;}.btn-screen{background:#FF477E;color:white;border:none;}.chat-box{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px;}.msg{max-width:85%;padding:10px 14px;border-radius:14px;font-size:0.95rem;line-height:1.4;word-break:break-all;}.msg.user{align-self:flex-end;background:#4A54F1;color:white;}.msg.nana{align-self:flex-start;background:white;border:1px solid #FFE0E9;}.screen-img{width:100%;max-width:320px;border-radius:8px;margin-top:6px;}.input-bar{display:flex;gap:8px;padding:10px;background:white;border-top:1px solid #FFE0E9;}.input-bar input{flex:1;border:1px solid #FFCCD7;border-radius:20px;padding:10px 16px;font-size:1rem;outline:none;}.input-bar button{background:#FF6B8B;color:white;border:none;border-radius:20px;padding:0 18px;font-weight:bold;cursor:pointer;}</style></head><body><div class="header"><span>나나 비서</span><span class="status-badge" id="pcStatus">확인 중...</span></div><div class="quick-actions"><button class="btn-quick btn-screen" onclick="requestScreen()">화면 보기</button><button class="btn-quick" onclick="sendCmd('바탕화면 보여줘')">바탕화면</button><button class="btn-quick" onclick="sendCmd('메이플스토리 켜줘')">메이플</button><button class="btn-quick" onclick="sendCmd('유튜브 켜줘')">유튜브</button></div><div class="chat-box" id="chat"><div class="msg nana">안녕! 컴퓨터가 꺼져 있어도 나는 24시간 언제든 대화할 수 있어!</div></div><div class="input-bar"><input type="text" id="msgInput" placeholder="메시지 입력..." onkeypress="if(event.keyCode==13)sendMsg()"><button onclick="sendMsg()">전송</button></div><script>async function checkStatus(){try{const res=await fetch('/api/status');const data=await res.json();const badge=document.getElementById('pcStatus');if(data.pc_online){badge.innerHTML='PC 연결됨';badge.style.background='#28A745';}else{badge.innerHTML='PC 꺼짐';badge.style.background='#6C757D';}}catch(e){}}setInterval(checkStatus,3000);checkStatus();async function requestScreen(){const chat=document.getElementById('chat');chat.innerHTML+=`<div class="msg user">화면 보여줘</div>`;const res=await fetch('/api/screen');const data=await res.json();if(data.image){chat.innerHTML+=`<div class="msg nana"><img src="${data.image}" class="screen-img"></div>`;}else{chat.innerHTML+=`<div class="msg nana">${data.reply||'PC가 꺼져 있어.'}</div>`;}chat.scrollTop=chat.scrollHeight;}async function sendCmd(t){document.getElementById('msgInput').value=t;sendMsg();}async function sendMsg(){const inp=document.getElementById('msgInput');const t=inp.value.trim();if(!t)return;inp.value='';const chat=document.getElementById('chat');chat.innerHTML+=`<div class="msg user">${t}</div>`;chat.scrollTop=chat.scrollHeight;const res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});const data=await res.json();chat.innerHTML+=`<div class="msg nana">${data.reply}</div>`;chat.scrollTop=chat.scrollHeight;}</script></body></html>"""
+HTML_MOBILE_APP = """<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>나나 AI 비서</title>
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#FF6B8B">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: #FFF5F7; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        .header { background: #FF6B8B; color: white; padding: 14px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 8px rgba(255,107,139,0.3); }
+        .header-title { display: flex; align-items: center; gap: 8px; font-size: 1.1rem; }
+        .status-badge { font-size: 0.75rem; padding: 4px 8px; border-radius: 12px; background: #6C757D; color: white; }
+        
+        .voice-bar { background: #FFE8EE; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #FFCCD7; }
+        .voice-status { font-size: 0.85rem; color: #D6336C; font-weight: bold; }
+        .btn-voice-toggle { background: #FF477E; color: white; border: none; padding: 6px 12px; border-radius: 14px; font-size: 0.8rem; font-weight: bold; cursor: pointer; }
+        .btn-voice-toggle.listening { background: #28A745; animation: pulse 1.5s infinite; }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.04); }
+            100% { transform: scale(1); }
+        }
+
+        .quick-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 8px 10px; background: #FFF0F5; }
+        .btn-quick { background: white; border: 1px solid #FFCCD7; color: #FF477E; padding: 8px 2px; border-radius: 8px; font-size: 0.75rem; font-weight: bold; cursor: pointer; text-align: center; }
+        .btn-screen { background: #FF477E; color: white; border: none; }
+        
+        .chat-box { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+        .msg { max-width: 85%; padding: 10px 14px; border-radius: 14px; font-size: 0.95rem; line-height: 1.4; word-break: break-all; }
+        .msg.user { align-self: flex-end; background: #4A54F1; color: white; border-bottom-right-radius: 2px; }
+        .msg.nana { align-self: flex-start; background: white; color: #333; border: 1px solid #FFE0E9; border-bottom-left-radius: 2px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
+        .screen-img { width: 100%; max-width: 320px; border-radius: 8px; border: 2px solid #FFCCD7; margin-top: 6px; display: block; }
+
+        .input-bar { display: flex; gap: 8px; padding: 10px; background: white; border-top: 1px solid #FFE0E9; }
+        .input-bar input { flex: 1; border: 1px solid #FFCCD7; border-radius: 20px; padding: 10px 16px; font-size: 1rem; outline: none; }
+        .input-bar button { background: #FF6B8B; color: white; border: none; border-radius: 20px; padding: 0 18px; font-weight: bold; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-title">🌸 나나 비서</div>
+        <span class="status-badge" id="pcStatus">연결 확인 중...</span>
+    </div>
+    
+    <div class="voice-bar">
+        <span class="voice-status" id="voiceStatus">🎙️ 마이크 대기 꺼짐</span>
+        <button class="btn-voice-toggle" id="btnVoice" onclick="toggleVoiceListening()">호출 대기 켜기</button>
+    </div>
+
+    <div class="quick-actions">
+        <button class="btn-quick btn-screen" onclick="requestScreen()">📸 화면 보기</button>
+        <button class="btn-quick" onclick="sendQuickCmd('바탕화면 보여줘')">🖥️ 바탕화면</button>
+        <button class="btn-quick" onclick="sendQuickCmd('메이플스토리 켜줘')">🍁 메이플</button>
+        <button class="btn-quick" onclick="sendQuickCmd('유튜브 켜줘')">▶️ 유튜브</button>
+    </div>
+
+    <div class="chat-box" id="chat">
+        <div class="msg nana">안녕! 언제든 '나나야'라고 부르거나 메시지를 입력해줘!</div>
+    </div>
+
+    <div class="input-bar">
+        <input type="text" id="msgInput" placeholder="명령 또는 대화 입력..." onkeypress="if(event.keyCode==13) sendMsg()">
+        <button onclick="sendMsg()">전송</button>
+    </div>
+
+    <script>
+        let isListening = false;
+        let recognition = null;
+
+        async function checkStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                const badge = document.getElementById('pcStatus');
+                if (data.pc_online) {
+                    badge.innerHTML = 'PC 연결됨';
+                    badge.style.background = '#28A745';
+                } else {
+                    badge.innerHTML = 'PC 꺼짐';
+                    badge.style.background = '#6C757D';
+                }
+            } catch (e) {}
+        }
+        setInterval(checkStatus, 3000);
+        checkStatus();
+
+        function speakText(text) {
+            if (!window.speechSynthesis) return;
+            const cleanText = text.replace(/\[PC_CMD:.+?\]/g, '').trim();
+            const utter = new SpeechSynthesisUtterance(cleanText);
+            utter.lang = 'ko-KR';
+            utter.rate = 1.05;
+            utter.pitch = 1.1;
+            window.speechSynthesis.speak(utter);
+        }
+
+        function initRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                alert("현재 브라우저에서 음성 인식을 지원하지 않습니다. 크롬 또는 사파리를 사용해주세요.");
+                return null;
+            }
+            const rec = new SpeechRecognition();
+            rec.lang = 'ko-KR';
+            rec.continuous = true;
+            rec.interimResults = false;
+
+            rec.onresult = (event) => {
+                const transcript = event.results[event.results.length - 1][0].transcript.trim();
+                const vStatus = document.getElementById('voiceStatus');
+                vStatus.innerText = `🎙️ 인식: "${transcript}"`;
+
+                if (transcript.includes("나나") || transcript.includes("나나야") || isListening) {
+                    let cmd = transcript.replace(/^(나나야|나나)\s*/, '');
+                    if (!cmd) cmd = "안녕";
+                    sendVoiceMsg(cmd);
+                }
+            };
+
+            rec.onend = () => {
+                if (isListening) {
+                    try { rec.start(); } catch (e) {}
+                }
+            };
+            return rec;
+        }
+
+        function toggleVoiceListening() {
+            const btn = document.getElementById('btnVoice');
+            const status = document.getElementById('voiceStatus');
+            if (!recognition) recognition = initRecognition();
+            if (!recognition) return;
+
+            isListening = !isListening;
+            if (isListening) {
+                try {
+                    recognition.start();
+                    btn.classList.add('listening');
+                    btn.innerText = '대기 끄기';
+                    status.innerText = '👂 "나나야" 부르는 중...';
+                } catch (e) {}
+            } else {
+                try {
+                    recognition.stop();
+                    btn.classList.remove('listening');
+                    btn.innerText = '호출 대기 켜기';
+                    status.innerText = '🎙️ 마이크 대기 꺼짐';
+                } catch (e) {}
+            }
+        }
+
+        async function requestScreen() {
+            const chat = document.getElementById('chat');
+            chat.innerHTML += `<div class="msg user">📸 화면 보여줘</div>`;
+            chat.scrollTop = chat.scrollHeight;
+
+            const res = await fetch('/api/screen');
+            const data = await res.json();
+            if (data.image) {
+                chat.innerHTML += `
+                    <div class="msg nana">
+                        현재 PC 화면이야!
+                        <img src="${data.image}" class="screen-img" onclick="window.open(this.src)">
+                    </div>
+                `;
+            } else {
+                chat.innerHTML += `<div class="msg nana">${data.reply || 'PC가 꺼져 있어.'}</div>`;
+                speakText(data.reply || 'PC가 꺼져 있어.');
+            }
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        function sendQuickCmd(t) {
+            document.getElementById('msgInput').value = t;
+            sendMsg();
+        }
+
+        async function sendVoiceMsg(text) {
+            sendMsgCore(text);
+        }
+
+        async function sendMsg() {
+            const inp = document.getElementById('msgInput');
+            const t = inp.value.trim();
+            if (!t) return;
+            inp.value = '';
+            sendMsgCore(t);
+        }
+
+        async function sendMsgCore(t) {
+            const chat = document.getElementById('chat');
+            chat.innerHTML += `<div class="msg user">${t}</div>`;
+            chat.scrollTop = chat.scrollHeight;
+
+            if (t.includes("화면") && (t.includes("봐") || t.includes("보여") || t.includes("캡처") || t.includes("찍어"))) {
+                requestScreen();
+                return;
+            }
+
+            const res = await fetch('/api/chat', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: t})
+            });
+            const data = await res.json();
+            chat.innerHTML += `<div class="msg nana">${data.reply}</div>`;
+            speakText(data.reply);
+            chat.scrollTop = chat.scrollHeight;
+        }
+    </script>
+</body>
+</html>"""
 
 class ChatRequest(BaseModel):
     text: str
@@ -76,7 +291,7 @@ async def get_screen():
 async def handle_chat(req: ChatRequest):
     global connected_pc_ws
     pc_online = (connected_pc_ws is not None)
-    system_instruction = f"너의 이름은 나나야. PC 제어와 대화를 돕는 20대 버추얼 AI 비서야. PC 상태: {'온라인' if pc_online else '오프라인'}. PC 제어 요청 시 [PC_CMD: 명령어] 포함해서 답해줘."
+    system_instruction = f"너의 이름은 나나야. PC 제어와 대화를 돕는 20대 버추얼 AI 비서야. PC 상태: {'온라인' if pc_online else '오프라인'}. PC 제어 요청 시 [PC_CMD: 명령어] 포함해서 1~2문장 다정한 반말로 답해줘."
     try:
         response = client.models.generate_content(
             model="gemini-2.5-flash",
