@@ -71,12 +71,12 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
     <meta name="theme-color" content="#FF6B8B">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background: #FFF5F7; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-        .header { background: #FF6B8B; color: white; padding: 14px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 8px rgba(255,107,139,0.3); }
+        html, body { background: #FFF5F7; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+        .header { background: #FF6B8B; color: white; padding: 12px 16px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 8px rgba(255,107,139,0.3); flex-shrink: 0; }
         .header-title { display: flex; align-items: center; gap: 8px; font-size: 1.1rem; }
         .status-badge { font-size: 0.75rem; padding: 4px 8px; border-radius: 12px; background: #6C757D; color: white; }
         
-        .voice-bar { background: #FFE8EE; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #FFCCD7; }
+        .voice-bar { background: #FFE8EE; padding: 8px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #FFCCD7; flex-shrink: 0; }
         .voice-status { font-size: 0.85rem; color: #D6336C; font-weight: bold; }
         .btn-voice-toggle { background: #FF477E; color: white; border: none; padding: 6px 12px; border-radius: 14px; font-size: 0.8rem; font-weight: bold; cursor: pointer; }
         .btn-voice-toggle.listening { background: #28A745; animation: pulse 1.5s infinite; }
@@ -87,19 +87,22 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
             100% { transform: scale(1); }
         }
 
-        .quick-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 8px 10px; background: #FFF0F5; }
+        .quick-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 8px 12px; background: #FFF0F5; flex-shrink: 0; }
         .btn-quick { background: white; border: 1px solid #FFCCD7; color: #FF477E; padding: 8px 2px; border-radius: 8px; font-size: 0.75rem; font-weight: bold; cursor: pointer; text-align: center; }
         .btn-screen { background: #FF477E; color: white; border: none; }
         
-        .chat-box { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+        /* 채팅 영역이 남은 공간을 채우고 스크롤되도록 설정 */
+        .chat-box { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; -webkit-overflow-scrolling: touch; }
         .msg { max-width: 85%; padding: 10px 14px; border-radius: 14px; font-size: 0.95rem; line-height: 1.4; word-break: break-all; }
         .msg.user { align-self: flex-end; background: #4A54F1; color: white; border-bottom-right-radius: 2px; }
         .msg.nana { align-self: flex-start; background: white; color: #333; border: 1px solid #FFE0E9; border-bottom-left-radius: 2px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
         .screen-img { width: 100%; max-width: 320px; border-radius: 8px; border: 2px solid #FFCCD7; margin-top: 6px; display: block; }
 
-        .input-bar { display: flex; gap: 8px; padding: 10px; background: white; border-top: 1px solid #FFE0E9; }
-        .input-bar input { flex: 1; border: 1px solid #FFCCD7; border-radius: 20px; padding: 10px 16px; font-size: 1rem; outline: none; }
-        .input-bar button { background: #FF6B8B; color: white; border: none; border-radius: 20px; padding: 0 18px; font-weight: bold; cursor: pointer; }
+        /* 하단 타이핑 입력바 고정 */
+        .input-bar { display: flex; gap: 8px; padding: 10px 12px; background: white; border-top: 1px solid #FFE0E9; flex-shrink: 0; position: relative; z-index: 10; }
+        .input-bar input { flex: 1; border: 1px solid #FFCCD7; border-radius: 20px; padding: 10px 16px; font-size: 1rem; outline: none; background: #FFF9FA; }
+        .input-bar input:focus { border-color: #FF6B8B; background: white; }
+        .input-bar button { background: #FF6B8B; color: white; border: none; border-radius: 20px; padding: 0 18px; font-weight: bold; font-size: 0.95rem; cursor: pointer; flex-shrink: 0; }
     </style>
 </head>
 <body>
@@ -124,6 +127,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
         <div class="msg nana">안녕! 스케줄 관리와 행동 학습 기능이 추가되었어. 기억해줬으면 하는 내용을 편하게 말해줘!</div>
     </div>
 
+    <!-- 명확하게 고정된 타이핑 입력 바 -->
     <div class="input-bar">
         <input type="text" id="msgInput" placeholder="명령 또는 학습 내용 입력..." onkeypress="if(event.keyCode==13) sendMsg()">
         <button onclick="sendMsg()">전송</button>
