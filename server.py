@@ -91,14 +91,12 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
         .btn-quick { background: white; border: 1px solid #FFCCD7; color: #FF477E; padding: 8px 2px; border-radius: 8px; font-size: 0.75rem; font-weight: bold; cursor: pointer; text-align: center; }
         .btn-screen { background: #FF477E; color: white; border: none; }
         
-        /* 채팅 영역이 남은 공간을 채우고 스크롤되도록 설정 */
         .chat-box { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; -webkit-overflow-scrolling: touch; }
         .msg { max-width: 85%; padding: 10px 14px; border-radius: 14px; font-size: 0.95rem; line-height: 1.4; word-break: break-all; }
         .msg.user { align-self: flex-end; background: #4A54F1; color: white; border-bottom-right-radius: 2px; }
         .msg.nana { align-self: flex-start; background: white; color: #333; border: 1px solid #FFE0E9; border-bottom-left-radius: 2px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
         .screen-img { width: 100%; max-width: 320px; border-radius: 8px; border: 2px solid #FFCCD7; margin-top: 6px; display: block; }
 
-        /* 하단 타이핑 입력바 고정 */
         .input-bar { display: flex; gap: 8px; padding: 10px 12px; background: white; border-top: 1px solid #FFE0E9; flex-shrink: 0; position: relative; z-index: 10; }
         .input-bar input { flex: 1; border: 1px solid #FFCCD7; border-radius: 20px; padding: 10px 16px; font-size: 1rem; outline: none; background: #FFF9FA; }
         .input-bar input:focus { border-color: #FF6B8B; background: white; }
@@ -118,16 +116,15 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
 
     <div class="quick-actions">
         <button class="btn-quick btn-screen" onclick="requestScreen()">📸 화면 보기</button>
-        <button class="btn-quick" onclick="sendQuickCmd('바탕화면 보여줘')">🖥️ 바탕화면</button>
+        <button class="btn-quick" onclick="sendQuickCmd('일정 보여줘')">📅 스케줄</button>
         <button class="btn-quick" onclick="sendQuickCmd('메이플스토리 켜줘')">🍁 메이플</button>
         <button class="btn-quick" onclick="sendQuickCmd('유튜브 켜줘')">▶️ 유튜브</button>
     </div>
 
     <div class="chat-box" id="chat">
-        <div class="msg nana">안녕! 스케줄 관리와 행동 학습 기능이 추가되었어. 기억해줬으면 하는 내용을 편하게 말해줘!</div>
+        <div class="msg nana">안녕! 이제 PC가 꺼져 있어도 즉시 대답하고 빠르게 소통할 수 있어!</div>
     </div>
 
-    <!-- 명확하게 고정된 타이핑 입력 바 -->
     <div class="input-bar">
         <input type="text" id="msgInput" placeholder="명령 또는 학습 내용 입력..." onkeypress="if(event.keyCode==13) sendMsg()">
         <button onclick="sendMsg()">전송</button>
@@ -311,7 +308,7 @@ async def get_screen():
     pending_command_futures[task_id] = fut
     try:
         await connected_pc_ws.send_text(json.dumps({"type": "get_screen", "task_id": task_id}))
-        result = await asyncio.wait_for(fut, timeout=6.0)
+        result = await asyncio.wait_for(fut, timeout=4.0)
         return {"image": result.get("image")}
     except Exception:
         return {"image": None, "reply": "화면을 가져오는 데 실패했어."}
@@ -329,7 +326,7 @@ async def handle_chat(req: ChatRequest):
 
     system_instruction = f"""
 너의 이름은 나나야. 사용자의 모바일 및 PC 제어와 스케줄 관리, 행동 학습을 돕는 만능 20대 버추얼 AI 비서야.
-PC 상태: {'온라인' if pc_online else '오프라인'}.
+PC 상태: {'온라인(연결됨)' if pc_online else '오프라인(꺼져있음)'}.
 
 [현재 기억된 학습 내용/규칙]
 {learned_context if learned_context else '아직 학습된 내용 없음'}
@@ -338,8 +335,8 @@ PC 상태: {'온라인' if pc_online else '오프라인'}.
 {schedule_context if schedule_context else '등록된 스케줄 없음'}
 
 [명령어 규칙]
-1. PC 제어 또는 프로그램 실행 요청 시: 답안에 [PC_CMD: 명령어] 형식 포함.
-2. 사용자가 어떤 규칙, 취향, 행동 패턴을 가르쳐주거나 학습을 시킬 때: 답안에 [LEARN: 학습할내용 요약] 형식 포함.
+1. PC 제어 또는 프로그램 실행 요청 시: PC가 온라인일 때만 [PC_CMD: 명령어] 형식을 포함하고, 오프라인이면 "지금 PC가 꺼져 있어서 실행할 수 없어"라고 해줘.
+2. 사용자가 규칙, 취향, 행동 패턴을 가르쳐줄 때: 답안에 [LEARN: 학습할내용 요약] 형식 포함.
 3. 스케줄 등록 요청 시: 답안에 [SCHEDULE: 날짜/시간|내용] 형식 포함.
 모든 답변은 다정한 반말로 1~2문장으로 짧게 해줘.
 """
@@ -356,8 +353,9 @@ PC 상태: {'온라인' if pc_online else '오프라인'}.
             match_learn = re.search(r'\[LEARN:\s*(.+?)\]', reply)
             if match_learn:
                 rule_text = match_learn.group(1).strip()
-                memory["learned_rules"].append(rule_text)
-                save_memory(memory)
+                if rule_text not in memory["learned_rules"]:
+                    memory["learned_rules"].append(rule_text)
+                    save_memory(memory)
 
         # 2. 스케줄 저장 처리
         if "[SCHEDULE:" in reply:
@@ -368,7 +366,7 @@ PC 상태: {'온라인' if pc_online else '오프라인'}.
                 memory["schedules"].append({"date": s_date, "content": s_content})
                 save_memory(memory)
 
-        # 3. PC 명령어 처리
+        # 3. PC 명령어 처리 (온라인일 때만 비동기 요청 후 즉시 반환 대기)
         if "[PC_CMD:" in reply and pc_online:
             match_cmd = re.search(r'\[PC_CMD:\s*(.+?)\]', reply)
             if match_cmd:
@@ -377,7 +375,14 @@ PC 상태: {'온라인' if pc_online else '오프라인'}.
                 loop = asyncio.get_event_loop()
                 fut = loop.create_future()
                 pending_command_futures[task_id] = fut
-                await connected_pc_ws.send_text(json.dumps({"type": "run_command", "task_id": task_id, "query": cmd_raw}))
+                try:
+                    await connected_pc_ws.send_text(json.dumps({"type": "run_command", "task_id": task_id, "query": cmd_raw}))
+                    # 응답 속도를 위해 최대 3초까지만 기다림
+                    await asyncio.wait_for(fut, timeout=3.0)
+                except Exception:
+                    pass
+                finally:
+                    pending_command_futures.pop(task_id, None)
 
         # 사용자에게 보여줄 때는 특수 태그 싹 정리해서 깔끔하게 전달
         clean_reply = re.sub(r'\[(PC_CMD|LEARN|SCHEDULE):.+?\]', '', reply).strip()
