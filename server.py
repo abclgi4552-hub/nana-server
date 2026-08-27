@@ -102,7 +102,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
     </div>
 
     <div class="chat-box" id="chat">
-        <div class="msg nana">안녕! 언제든 '나나야'라고 부르거나 메시지를 입력해줘!</div>
+        <div class="msg nana">안녕! 휴대폰에서도 PC 제어와 모든 API 기능을 다 쓸 수 있어. 편하게 말해줘!</div>
     </div>
 
     <div class="input-bar">
@@ -140,14 +140,9 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
             utter.rate = 1.05;
             utter.pitch = 1.1;
 
-            isSpeaking = true; // 나나가 말하는 동안 인식 일시정지
-
-            utter.onend = () => {
-                isSpeaking = false;
-            };
-            utter.onerror = () => {
-                isSpeaking = false;
-            };
+            isSpeaking = true;
+            utter.onend = () => { isSpeaking = false; };
+            utter.onerror = () => { isSpeaking = false; };
 
             window.speechSynthesis.speak(utter);
         }
@@ -164,7 +159,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
             rec.interimResults = false;
 
             rec.onresult = (event) => {
-                if (isSpeaking) return; // 나나가 말하고 있을 때 들어온 소리는 무시!
+                if (isSpeaking) return;
 
                 const transcript = event.results[event.results.length - 1][0].transcript.trim();
                 const vStatus = document.getElementById('voiceStatus');
@@ -286,7 +281,7 @@ async def get_status():
 async def get_screen():
     global connected_pc_ws
     if not connected_pc_ws:
-        return {"image": None, "reply": "지금 집 컴퓨터가 꺼져 있어서 화면을 캡처할 수 없어!"}
+        return {"image": None, "reply": "지금 집 컴퓨터가 꺼져 있어."}
     task_id = f"task_{datetime.now().timestamp()}"
     loop = asyncio.get_event_loop()
     fut = loop.create_future()
@@ -304,7 +299,7 @@ async def get_screen():
 async def handle_chat(req: ChatRequest):
     global connected_pc_ws
     pc_online = (connected_pc_ws is not None)
-    system_instruction = f"너의 이름은 나나야. PC 제어와 대화를 돕는 20대 버추얼 AI 비서야. PC 상태: {'온라인' if pc_online else '오프라인'}. PC 제어 요청 시 [PC_CMD: 명령어] 포함해서 1~2문장 다정한 반말로 답해줘."
+    system_instruction = f"너의 이름은 나나야. 사용자의 모바일 및 PC 제어와 스케줄 관리를 돕는 만능 20대 버추얼 AI 비서야. PC 상태: {'온라인' if pc_online else '오프라인'}. PC 제어나 프로그램 실행 요청 시 [PC_CMD: 명령어] 형식을 포함해서 다정한 반말로 답해줘."
     try:
         response = client.models.generate_content(
             model="gemini-3.6-flash",
