@@ -144,7 +144,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
         function initRecognition() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (!SpeechRecognition) {
-                alert("현재 브라우저에서 음성 인식을 지원하지 않습니다. 크롬 또는 사파리를 사용해주세요.");
+                alert("현재 브라우저에서 음성 인식을 지원하지 않습니다.");
                 return null;
             }
             const rec = new SpeechRecognition();
@@ -294,7 +294,7 @@ async def handle_chat(req: ChatRequest):
     system_instruction = f"너의 이름은 나나야. PC 제어와 대화를 돕는 20대 버추얼 AI 비서야. PC 상태: {'온라인' if pc_online else '오프라인'}. PC 제어 요청 시 [PC_CMD: 명령어] 포함해서 1~2문장 다정한 반말로 답해줘."
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
             contents=req.text,
             config=types.GenerateContentConfig(system_instruction=system_instruction, temperature=0.6)
         )
