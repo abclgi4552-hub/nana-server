@@ -53,27 +53,6 @@ def init_db():
 
 init_db()
 
-def get_schedules_from_db():
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT time_str, content FROM schedules ORDER BY id DESC LIMIT 10")
-        rows = cursor.fetchall()
-        conn.close()
-        return rows
-    except Exception:
-        return []
-
-def add_schedule_to_db(time_str: str, content: str):
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO schedules (time_str, content) VALUES (?, ?)", (time_str, content))
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
-
 def save_chat_to_db(sender, message):
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -173,7 +152,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
     </div>
 
     <div class="chat-box" id="chat">
-        <div class="msg nana">PC 연동 캘린더 모드 가동 완료! 무엇을 도와줄까?</div>
+        <div class="msg nana">PC 완벽 연동 모드 가동 완료! 무엇을 도와줄까?</div>
     </div>
 
     <div class="input-bar">
@@ -355,7 +334,7 @@ async def get_screen():
     pending_command_futures[task_id] = fut
     try:
         await connected_pc_ws.send_text(json.dumps({"type": "get_screen", "task_id": task_id}))
-        result = await asyncio.wait_for(fut, timeout=3.0)
+        result = await asyncio.wait_for(fut, timeout=4.0)
         return {"image": result.get("image")}
     except Exception:
         return {"image": None, "reply": "화면을 가져오는 데 실패했어."}
@@ -392,20 +371,36 @@ async def handle_chat(req: ChatRequest):
         save_chat_to_db("bot", reply_str)
         return {"reply": reply_str}
 
-    # 3. 스케줄 조회 요청 시 PC가 켜져 있으면 PC 쪽 DB 상태를 우선 반영하도록 처리
+    # 3. 스케줄 조회 요청 시, PC가 켜져 있으면 PC에 직접 일정을 물어보도록 웹소켓 토스!
     if any(k in prompt_text for k in ["일정", "스케줄", "목록"]):
-        rows = get_schedules_from_db()
-        if not rows:
-            schedule_text = "등록된 스케줄이 없어."
-        else:
-            schedule_text = "저장된 스케줄 목록이야:\n" + "".join([f"- [{r[0]}]: {r[1]}\n" for r in rows])
-        elapsed = (datetime.datetime.now() - start_time).total_seconds()
-        reply_str = f"{schedule_text.strip()}\n⏱️ (처리 시간: {elapsed:.2f}초)"
-        save_chat_to_db("bot", reply_str)
-        return {"reply": reply_str}
+        if pc_online:
+            task_id = f"task_{datetime.datetime.now().timestamp()}"
+            loop = asyncio.get_event_loop()
+            fut = loop.create_future()
+            pending_command_futures[task_id] = fut
+            try:
+                await connected_pc_ws.send_text(json.dumps({"type": "run_command", "task_id": task_id, "query": "일정 보여줘"}))
+                res_data = await asyncio.wait_for(fut, timeout=3.0)
+                if res_data and "result" in res_data:
+                    elapsed = (datetime.datetime.now() - start_time).total_seconds()
+                    final_reply = f"{res_data['result']}\n⏱️ (처리 시간: {elapsed:.2f}초)"
+                    save_chat_to_db("bot", final_reply)
+                    return {"reply": final_reply}
+            except Exception:
+                pass
+            finally:
+                pending_command_futures.pop(task_id, None)
 
-    rows = get_schedules_from_db()
-    schedule_context = "\n".join([f"- [{r[0]}] {r[1]}" for r in rows]) if rows else '등록된 스케줄이 없어.'
+    # 로컬 fallback 스케줄 조회
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT time_str, content FROM schedules ORDER BY id DESC LIMIT 10")
+        rows = cursor.fetchall()
+        conn.close()
+        schedule_context = "\n".join([f"- [{r[0]}] {r[1]}" for r in rows]) if rows else '등록된 스케줄이 없어.'
+    except Exception:
+        schedule_context = '등록된 스케줄이 없어.'
 
     system_instruction = f"""
 너는 다정한 20대 버추얼 AI 비서 '나나'야. 반말로 즉시 대답해.
@@ -436,13 +431,20 @@ async def handle_chat(req: ChatRequest):
         )
         reply = response.text.strip() if response.text else "알겠어!"
 
-        # 스케줄 등록 태그 감지 및 DB 저장 (모바일과 PC가 같은 DB 파일을 바라보므로 즉시 동기화)
+        # 스케줄 등록 태그 감지 및 DB 저장
         if "[SCHEDULE:" in reply:
             match_sched = re.search(r'\[SCHEDULE:\s*(.+?)\s*\|\s*(.+?)\]', reply)
             if match_sched:
                 s_date = match_sched.group(1).strip()
                 s_content = match_sched.group(2).strip()
-                add_schedule_to_db(s_date, s_content)
+                try:
+                    conn = sqlite3.connect(DB_FILE)
+                    cursor = conn.cursor()
+                    cursor.execute("INSERT INTO schedules (time_str, content) VALUES (?, ?)", (s_date, s_content))
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
 
         # PC 명령어 처리 및 결과 수신 대기
         if "[PC_CMD:" in reply and pc_online:
@@ -455,7 +457,7 @@ async def handle_chat(req: ChatRequest):
                 pending_command_futures[task_id] = fut
                 try:
                     await connected_pc_ws.send_text(json.dumps({"type": "run_command", "task_id": task_id, "query": cmd_raw}))
-                    res_data = await asyncio.wait_for(fut, timeout=2.5)
+                    res_data = await asyncio.wait_for(fut, timeout=3.0)
                     if res_data and "result" in res_data:
                         reply = res_data["result"]
                 except Exception:
