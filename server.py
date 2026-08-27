@@ -18,7 +18,6 @@ app = FastAPI()
 
 DB_FILE = "nana_memory.db"
 
-# PC와 동일한 SQLite DB 초기화 및 공유 함수들
 def init_db():
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -174,7 +173,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
     </div>
 
     <div class="chat-box" id="chat">
-        <div class="msg nana">초고속 터보 모드 & DB 캘린더 연동 완료! 무엇을 도와줄까?</div>
+        <div class="msg nana">PC 연동 캘린더 모드 가동 완료! 무엇을 도와줄까?</div>
     </div>
 
     <div class="input-bar">
@@ -393,7 +392,7 @@ async def handle_chat(req: ChatRequest):
         save_chat_to_db("bot", reply_str)
         return {"reply": reply_str}
 
-    # 3. 스케줄 조회 가속 ("일정 보여줘" 등)
+    # 3. 스케줄 조회 요청 시 PC가 켜져 있으면 PC 쪽 DB 상태를 우선 반영하도록 처리
     if any(k in prompt_text for k in ["일정", "스케줄", "목록"]):
         rows = get_schedules_from_db()
         if not rows:
@@ -437,7 +436,7 @@ async def handle_chat(req: ChatRequest):
         )
         reply = response.text.strip() if response.text else "알겠어!"
 
-        # 스케줄 등록 태그 감지 및 DB 저장
+        # 스케줄 등록 태그 감지 및 DB 저장 (모바일과 PC가 같은 DB 파일을 바라보므로 즉시 동기화)
         if "[SCHEDULE:" in reply:
             match_sched = re.search(r'\[SCHEDULE:\s*(.+?)\s*\|\s*(.+?)\]', reply)
             if match_sched:
