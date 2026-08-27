@@ -112,6 +112,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
 
     <script>
         let isListening = false;
+        let isSpeaking = false;
         let recognition = null;
 
         async function checkStatus() {
@@ -138,6 +139,16 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
             utter.lang = 'ko-KR';
             utter.rate = 1.05;
             utter.pitch = 1.1;
+
+            isSpeaking = true; // 나나가 말하는 동안 인식 일시정지
+
+            utter.onend = () => {
+                isSpeaking = false;
+            };
+            utter.onerror = () => {
+                isSpeaking = false;
+            };
+
             window.speechSynthesis.speak(utter);
         }
 
@@ -153,6 +164,8 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
             rec.interimResults = false;
 
             rec.onresult = (event) => {
+                if (isSpeaking) return; // 나나가 말하고 있을 때 들어온 소리는 무시!
+
                 const transcript = event.results[event.results.length - 1][0].transcript.trim();
                 const vStatus = document.getElementById('voiceStatus');
                 vStatus.innerText = `🎙️ 인식: "${transcript}"`;
