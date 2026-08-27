@@ -2,7 +2,7 @@
 import re
 import json
 import asyncio
-from datetime import datetime
+import datetime
 from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -63,7 +63,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>나나 AI 비서</title>
+    <title>🌸 나나 - 모바일 리모트</title>
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -104,7 +104,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
 </head>
 <body>
     <div class="header">
-        <div class="header-title">🌸 나나 비서</div>
+        <div class="header-title">🌸 나나 모바일 리모트</div>
         <span class="status-badge" id="pcStatus">연결 확인 중...</span>
     </div>
     
@@ -116,16 +116,16 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
     <div class="quick-actions">
         <button class="btn-quick btn-screen" onclick="requestScreen()">📸 화면 보기</button>
         <button class="btn-quick" onclick="sendQuickCmd('일정 보여줘')">📅 스케줄</button>
-        <button class="btn-quick" onclick="sendQuickCmd('메이플스토리 켜줘')">🍁 메이플</button>
+        <button class="btn-quick" onclick="sendQuickCmd('지금 몇 시야?')">⏰ 시간 확인</button>
         <button class="btn-quick" onclick="sendQuickCmd('유튜브 켜줘')">▶️ 유튜브</button>
     </div>
 
     <div class="chat-box" id="chat">
-        <div class="msg nana">초고속 터보 모드 가동 완료! 무엇을 도와줄까?</div>
+        <div class="msg nana">초고속 터보 모드 & 캘린더 연동 가동 완료! 무엇을 도와줄까?</div>
     </div>
 
     <div class="input-bar">
-        <input type="text" id="msgInput" placeholder="명령 또는 학습 내용 입력..." onkeypress="if(event.keyCode==13) sendMsg()">
+        <input type="text" id="msgInput" placeholder="명령, 스케줄 또는 계산식 입력..." onkeypress="if(event.keyCode==13) sendMsg()">
         <button onclick="sendMsg()">전송</button>
     </div>
 
@@ -153,7 +153,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
 
         function speakText(text) {
             if (!window.speechSynthesis) return;
-            const cleanText = text.replace(/\[PC_CMD:.+?\]/g, '').replace(/\[LEARN:.+?\]/g, '').replace(/\[SCHEDULE:.+?\]/g, '').trim();
+            const cleanText = text.replace(/\[PC_CMD:.+?\]/g, '').replace(/\[LEARN:.+?\]/g, '').replace(/\[SCHEDULE:.+?\]/g, '').replace(/⏱️.+$/, '').trim();
             const utter = new SpeechSynthesisUtterance(cleanText);
             utter.lang = 'ko-KR';
             utter.rate = 1.05;
@@ -221,7 +221,7 @@ HTML_MOBILE_APP = """<!DOCTYPE html>
 
         async function requestScreen() {
             const chat = document.getElementById('chat');
-            chat.innerHTML += `<div class="msg user">📸 화면 보여줘</div>`;
+            chat.innerHTML += `<div class="msg user">📸 현재 컴퓨터 화면 보여줘</div>`;
             chat.scrollTop = chat.scrollHeight;
 
             const res = await fetch('/api/screen');
@@ -297,7 +297,7 @@ async def get_screen():
     global connected_pc_ws
     if not connected_pc_ws:
         return {"image": None, "reply": "지금 집 컴퓨터가 꺼져 있어."}
-    task_id = f"task_{datetime.now().timestamp()}"
+    task_id = f"task_{datetime.datetime.now().timestamp()}"
     loop = asyncio.get_event_loop()
     fut = loop.create_future()
     pending_command_futures[task_id] = fut
@@ -313,15 +313,35 @@ async def get_screen():
 @app.post("/api/chat")
 async def handle_chat(req: ChatRequest):
     global connected_pc_ws
+    prompt_text = req.text.strip()
     pc_online = (connected_pc_ws is not None)
     
+    start_time = datetime.datetime.now()
+
+    # 1. 로컬 계산기 가속 (사칙연산)
+    cleaned_calc = prompt_text.replace(" ", "").replace("X", "*").replace("x", "*").replace("÷", "/")
+    if re.fullmatch(r"[0-9\+\-\*\/\(\)\.]+", cleaned_calc):
+        try:
+            result = eval(cleaned_calc)
+            elapsed = (datetime.datetime.now() - start_time).total_seconds()
+            return {"reply": f"계산 결과는 {result}야!\n⏱️ (처리 시간: {elapsed:.2f}초)"}
+        except Exception:
+            pass
+
+    # 2. 실시간 시간 확인 가속
+    if any(k in prompt_text for k in ["몇 시", "시간", "몇시", "몇 년", "오늘 날짜"]):
+        now = datetime.datetime.now()
+        time_str = now.strftime('%Y년 %m월 %d일 %p %I시 %m분').replace('AM', '오전').replace('PM', '오후')
+        elapsed = (datetime.datetime.now() - start_time).total_seconds()
+        return {"reply": f"지금은 {time_str}야!\n⏱️ (처리 시간: {elapsed:.2f}초)"}
+
     memory = load_memory()
     learned_context = "\n".join([f"- {r}" for r in memory["learned_rules"][-10:]])
     schedule_context = "\n".join([f"- [{s['date']}] {s['content']}" for s in memory["schedules"][-10:]])
 
     system_instruction = f"""
-너의 이름은 나나야. 사용자의 모바일 및 PC 제어와 스케줄 관리, 행동 학습을 돕는 만능 20대 버추얼 AI 비서야.
-- 현재 시각: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+너는 다정한 20대 버추얼 AI 비서 '나나'야. 반말로 즉시 대답해.
+- 현재 시각: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}
 - PC 상태: {'온라인(연결됨)' if pc_online else '오프라인(꺼져있음)'}.
 
 [기억된 학습 내용]
@@ -331,19 +351,24 @@ async def handle_chat(req: ChatRequest):
 {schedule_context if schedule_context else '없음'}
 
 [규칙]
-1. PC 제어 요청 시: PC가 온라인일 때만 [PC_CMD: 명령어] 형식 포함, 오프라인이면 PC가 꺼져있다고 안내.
+1. PC 제어/실행 요청 시: PC가 온라인일 때만 [PC_CMD: 명령어] 형식 포함, 오프라인이면 PC가 꺼져있다고 안내.
 2. 학습 내용/규칙 등록 요청 시: 반드시 답안에 [LEARN: 요약내용] 형식 포함.
-3. 스케줄/알람 등록 요청 시: 반드시 답안에 [SCHEDULE: 날짜/시간|내용] 형식 포함.
+3. 스케줄 등록 요청 시: 반드시 답안에 [SCHEDULE: 날짜|내용] 형식 포함.
 4. 일상 대화나 단순 질문은 태그 없이 가볍고 다정한 반말로 1~2문장으로 즉시 답변.
 """
+
     try:
-        # 일상 대화일 때는 도구/태그 처리를 가볍게 하고 속도 우선형 설정 적용
+        # 스마트 동적 토큰 제어 적용 (코드/설명 요청 시 8192, 평소 2000)
+        needs_long_response = any(k in prompt_text for k in ["코드", "설명", "알려줘", "분석", "작성", "짜줘", "추천", "정리"])
+        target_tokens = 8192 if needs_long_response else 2000
+
         response = client.models.generate_content(
             model="gemini-3.6-flash",
-            contents=req.text,
+            contents=prompt_text,
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
-                temperature=0.3
+                temperature=0.3,
+                max_output_tokens=target_tokens
             )
         )
         reply = response.text.strip() if response.text else "알겠어!"
@@ -357,7 +382,7 @@ async def handle_chat(req: ChatRequest):
                     memory["learned_rules"].append(rule_text)
                     save_memory(memory)
 
-        # 스케줄 저장
+        # 스케줄 저장 (캘린더 연동 보완)
         if "[SCHEDULE:" in reply:
             match_sched = re.search(r'\[SCHEDULE:\s*(.+?)\s*\|\s*(.+?)\]', reply)
             if match_sched:
@@ -366,27 +391,32 @@ async def handle_chat(req: ChatRequest):
                 memory["schedules"].append({"date": s_date, "content": s_content})
                 save_memory(memory)
 
-        # PC 명령어 처리
+        # PC 명령어 처리 및 결과 수신 대기
         if "[PC_CMD:" in reply and pc_online:
             match_cmd = re.search(r'\[PC_CMD:\s*(.+?)\]', reply)
             if match_cmd:
                 cmd_raw = match_cmd.group(1).strip()
-                task_id = f"task_{datetime.now().timestamp()}"
+                task_id = f"task_{datetime.datetime.now().timestamp()}"
                 loop = asyncio.get_event_loop()
                 fut = loop.create_future()
                 pending_command_futures[task_id] = fut
                 try:
                     await connected_pc_ws.send_text(json.dumps({"type": "run_command", "task_id": task_id, "query": cmd_raw}))
-                    await asyncio.wait_for(fut, timeout=2.5)
+                    res_data = await asyncio.wait_for(fut, timeout=2.5)
+                    if res_data and "result" in res_data:
+                        reply = res_data["result"]
                 except Exception:
                     pass
                 finally:
                     pending_command_futures.pop(task_id, None)
 
         clean_reply = re.sub(r'\[(PC_CMD|LEARN|SCHEDULE):.+?\]', '', reply).strip()
-        return {"reply": clean_reply if clean_reply else "기억해둘게!"}
+        elapsed = (datetime.datetime.now() - start_time).total_seconds()
+        final_reply = f"{clean_reply if clean_reply else '응, 알겠어!'}\n⏱️ (처리 시간: {elapsed:.2f}초)"
+        return {"reply": final_reply}
     except Exception as e:
-        return {"reply": f"오류 발생: {e}"}
+        elapsed = (datetime.datetime.now() - start_time).total_seconds()
+        return {"reply": f"오류 발생: {e}\n⏱️ (처리 시간: {elapsed:.2f}초)"}
 
 if __name__ == "__main__":
     import uvicorn
